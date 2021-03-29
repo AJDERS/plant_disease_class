@@ -5,12 +5,9 @@ from PIL import Image
 from random import sample
 
 def main():
-    try:
-        os.mkdir('storage/train')
-        os.mkdir('storage/valid')
-        os.mkdir('storage/eval')
-    except:
-        pass
+    os.makedirs('storage/train', exist_ok=True)
+    os.makedirs('storage/valid', exist_ok=True)
+    os.makedirs('storage/eval', exist_ok=True)
     for mode in ['train','valid','eval']:
         print(f'Processing "{mode}" data.')
         if mode != 'train':
