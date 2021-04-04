@@ -3,7 +3,11 @@ import configparser
 import numpy as np
 import tensorflow as tf
 import importlib
-from util import make_tfrecords
+from keras.preprocessing.image import ImageDataGenerator
+from keras.callbacks import ModelCheckpoint
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 #from tensorflow.keras.optimizers import Adam
 
 class Compiler():
@@ -13,35 +17,39 @@ class Compiler():
         self.config.read(config_path)
         self.config_path = config_path
         self.storage_dir = self.config['DATA'].get('StorageDirectory')
-        self.type = self.config['DATA'].get('Type')
-        self.shuffle_buffer = self.config['TRAINING'].getint('ShuffleBuffer')
         self.batch_size = self.config['TRAINING'].getint('BatchSize')
         self.model_name = self.config['TRAINING'].get('ModelName')
         self.epochs = self.config['TRAINING'].getint('Epochs')
+        self.patience = self.config['TRAINING'].getint('Patience')
         self._load_data()
         self._build_model()
 
     def _load_data(self):
-        if not make_tfrecords.make_records(self.storage_dir, self.type):
-            print('Making records...')
-        for mode in ['train', 'valid', 'eval']:
-            if mode == 'train':
-                d = np.load(f'{os.path.join(self.storage_dir, self.type, mode)}_data.npy')
-                l = np.load(f'{os.path.join(self.storage_dir, self.type, mode)}_label.npy')
-                self.train_data = tf.data.Dataset.from_tensor_slices((d,l))
-                self.train_data = self.train_data.shuffle(self.shuffle_buffer).batch(self.batch_size)
-            elif mode == 'valid':
-                d = np.load(f'{os.path.join(self.storage_dir, self.type, mode)}_data.npy')
-                l = np.load(f'{os.path.join(self.storage_dir, self.type, mode)}_label.npy')
-                self.valid_data = tf.data.Dataset.from_tensor_slices((d,l))
-                self.valid_data = self.valid_data.shuffle(self.shuffle_buffer).batch(self.batch_size)
-            else:
-                d = np.load(f'{os.path.join(self.storage_dir, self.type, mode)}_data.npy')
-                l = np.load(f'{os.path.join(self.storage_dir, self.type, mode)}_label.npy')
-                self.eval_data = tf.data.Dataset.from_tensor_slices((d,l))
-                self.eval_data = self.eval_data.shuffle(self.shuffle_buffer).batch(self.batch_size)
-        num_classes = len([x for x in os.listdir(os.path.join(self.storage_dir, 'train')) if self.type in x])
-        self.num_classes = num_classes
+        train_datagen = ImageDataGenerator(
+            rescale=1./255,
+            shear_range=0.2,
+            zoom_range=0.2,
+            width_shift_range=0.2,
+            height_shift_range=0.2,
+            fill_mode='nearest'
+        )
+        valid_datagen = ImageDataGenerator(rescale=1./255)
+
+        self.training_set = train_datagen.flow_from_directory(
+            self.storage_dir+'/train',
+            target_size=(256, 256),
+            batch_size=self.batch_size,
+            class_mode='categorical'
+        )
+        self.valid_set = valid_datagen.flow_from_directory(
+            self.storage_dir+'/valid',
+            target_size=(256, 256),
+            batch_size=self.batch_size,
+            class_mode='categorical'
+        )
+        self.train_num = self.training_set.samples
+        self.valid_num = self.valid_set.samples
+
 
     def _build_model(self):
         tmp = self.model_name.split('.')
@@ -52,13 +60,80 @@ class Compiler():
                 package=None
         )
         class_ = getattr(model, class_name)
-        self.model = class_(self.num_classes, self.config_path)._make_model()
+        self.model = class_()._make_model()
 
     def compile(self):
-        self.model.compile(optimizer='adam', loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True), metrics=['accuracy'])
+        self.model.compile(
+            optimizer='adam',
+            loss='categorical_crossentropy',
+            metrics=['accuracy']
+        )
 
     def fit(self):
-        self.model.fit(self.train_data, epochs=self.epochs, validation_data=self.valid_data)
+        weightpath = f"output/best_checkpoint_weight.hdf5"
+        checkpoint = ModelCheckpoint(weightpath, monitor='val_accuracy', verbose=1, save_best_only=True, save_weights_only=True, mode='max')
+        patience = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=self.patience)
+        callbacks_list = [checkpoint, patience]
+        self.history = self.model.fit(self.training_set,
+                         steps_per_epoch=self.train_num//self.batch_size,
+                         validation_data=self.valid_set,
+                         epochs=self.epochs,
+                         validation_steps=self.valid_num//self.batch_size,
+                         callbacks=callbacks_list
+        )
+        filepath=f"output/model_path.hdf5"
+        self.model.save(filepath)
+        return self.history
 
-    def evaluate(self):
-        self.model.evaluate(self.eval_data)
+    def plot_history(self):
+        #plotting training values
+        sns.set()
+
+        acc = self.history.history['accuracy']
+        val_acc = self.history.history['val_accuracy']
+        loss = self.history.history['loss']
+        val_loss = self.history.history['val_loss']
+        epochs = range(1, len(loss) + 1)
+
+        #accuracy plot
+        plt.plot(epochs, acc, color='green', label='Training Accuracy')
+        plt.plot(epochs, val_acc, color='blue', label='Validation Accuracy')
+        plt.title('Training and Validation Accuracy')
+        plt.ylabel('Accuracy')
+        plt.xlabel('Epoch')
+        plt.legend()
+
+        plt.figure()
+        #loss plot
+        plt.plot(epochs, loss, color='pink', label='Training Loss')
+        plt.plot(epochs, val_loss, color='red', label='Validation Loss')
+        plt.title('Training and Validation Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+
+        plt.savefig('output/history.png')
+
+    def plot_prediction(self):
+        image_path = f"{self.storage_dir}/valid/Tomato___Septoria_leaf_spot/0a5edec2-e297-4a25-86fc-78f03772c100___JR_Sept.L.S 8468.JPG"
+        new_img = image.load_img(image_path, target_size=(256, 256))
+        img = image.img_to_array(new_img)
+        img = np.expand_dims(img, axis=0)
+        img = img/255
+
+        print("Following is our prediction:")
+        prediction = self.model.predict(img)
+        # decode the results into a list of tuples (class, description, probability)
+        # (one such list for each sample in the batch)
+        d = prediction.flatten()
+        j = d.max()
+        for index,item in enumerate(d):
+            if item == j:
+                class_name = li[index]
+
+        #ploting image with predicted class name        
+        plt.figure(figsize = (4,4))
+        plt.imshow(new_img)
+        plt.axis('off')
+        plt.title(class_name)
+        plt.savefig('output/prediction.png')
