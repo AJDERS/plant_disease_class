@@ -3,10 +3,13 @@ import configparser
 import numpy as np
 import tensorflow as tf
 import importlib
-from keras.preprocessing.image import ImageDataGenerator, load_img, img_to_array
-from keras.callbacks import ModelCheckpoint
 import matplotlib.pyplot as plt
 import seaborn as sns
+import pandas as pd
+from keras.preprocessing.image import ImageDataGenerator, load_img, img_to_array
+from keras.callbacks import ModelCheckpoint
+from util.save_to_csv import save_result_to_csv
+
 
 #from tensorflow.keras.optimizers import Adam
 
@@ -16,42 +19,54 @@ class Compiler():
         self.config = configparser.ConfigParser()
         self.config.read(config_path)
         self.config_path = config_path
-        self.storage_dir = self.config['DATA'].get('StorageDirectory')
+        self.storage_dir = self.config['DATA'].get('TrainingInputDirectory')
+        self.output_dir = self.config['DATA'].get('TrainingOutputDirectory')
+        self.prediction_output_dir = self.config['PREDICTION'].get('PredictionOutputDirectory')
         self.batch_size = self.config['TRAINING'].getint('BatchSize')
         self.model_name = self.config['TRAINING'].get('ModelName')
         self.epochs = self.config['TRAINING'].getint('Epochs')
         self.patience = self.config['TRAINING'].getint('Patience')
+        self.we_are_training = self.config['TRAINING'].get('Training')
+        self.load_model = self.config['PREDICTION'].get('LoadModel')
+        self.saved_model_path = self.config['PREDICTION'].get('ModelWeightPath')
         self.loaded_weights = False
         self._load_data()
-        self._build_model()
+        self.load_or_build_model()
 
     def _load_data(self):
-        train_datagen = ImageDataGenerator(
-            rescale=1./255,
-            shear_range=0.2,
-            zoom_range=0.2,
-            width_shift_range=0.2,
-            height_shift_range=0.2,
-            fill_mode='nearest'
-        )
-        valid_datagen = ImageDataGenerator(rescale=1./255)
+        if self.we_are_training == 'Y':
+            train_datagen = ImageDataGenerator(
+                rescale=1./255,
+                shear_range=0.2,
+                zoom_range=0.2,
+                width_shift_range=0.2,
+                height_shift_range=0.2,
+                fill_mode='nearest'
+            )
+            valid_datagen = ImageDataGenerator(rescale=1./255)
 
-        self.training_set = train_datagen.flow_from_directory(
-            self.storage_dir+'/train',
-            target_size=(256, 256),
-            batch_size=self.batch_size,
-            class_mode='categorical'
-        )
-        self.valid_set = valid_datagen.flow_from_directory(
-            self.storage_dir+'/valid',
-            target_size=(256, 256),
-            batch_size=self.batch_size,
-            class_mode='categorical'
-        )
-        self.train_num = self.training_set.samples
-        self.valid_num = self.valid_set.samples
-        self.class_dict = self.training_set.class_indices
+            self.training_set = train_datagen.flow_from_directory(
+                self.storage_dir+'/train',
+                target_size=(256, 256),
+                batch_size=self.batch_size,
+                class_mode='categorical'
+            )
+            self.valid_set = valid_datagen.flow_from_directory(
+                self.storage_dir+'/valid',
+                target_size=(256, 256),
+                batch_size=self.batch_size,
+                class_mode='categorical'
+            )
+            self.train_num = self.training_set.samples
+            self.valid_num = self.valid_set.samples
+            self.class_dict = self.training_set.class_indices
+        else:
+            self._load_class_dict()
 
+    def _load_class_dict(self):
+        class_dict_df = pd.read_csv(f'{self.output_dir}/class_dict.csv')
+        class_dict = class_dict_df.to_dict(orient='list')
+        self.class_dict = {k: v[0] for (k, v) in class_dict.items()}
 
     def _build_model(self):
         tmp = self.model_name.split('.')
@@ -72,7 +87,7 @@ class Compiler():
         )
 
     def fit(self):
-        weightpath = f"output/best_checkpoint_weight.hdf5"
+        weightpath = f"{self.output_dir }/best_checkpoint_weight.hdf5"
         checkpoint = ModelCheckpoint(weightpath, monitor='val_accuracy', verbose=1, save_best_only=True, save_weights_only=True, mode='max')
         patience = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=self.patience)
         callbacks_list = [checkpoint, patience]
@@ -83,7 +98,7 @@ class Compiler():
                          validation_steps=self.valid_num//self.batch_size,
                          callbacks=callbacks_list
         )
-        filepath=f"output/model_path.hdf5"
+        filepath=f"{self.output_dir }/model_path.hdf5"
         self.model.save(filepath)
         return self.history
 
@@ -114,24 +129,16 @@ class Compiler():
         plt.ylabel('Loss')
         plt.legend()
 
-        plt.savefig('output/history.png')
+        plt.savefig(f'{self.output_dir}/history.png')
 
-    def plot_prediction(self):
-        image_path = f"{self.storage_dir}/valid/Tomato___Septoria_leaf_spot/0a5edec2-e297-4a25-86fc-78f03772c100___JR_Sept.L.S 8468.JPG"
-        prediction = self.predict(image_path)
+    def load_or_build_model(self):
+        self._build_model()
+        if self.load_model == 'Y':
+            self.model.load_weights(self.saved_model_path)
+            self.loaded_weights = True
+            
 
-        #ploting image with predicted class name        
-        plt.figure(figsize = (4,4))
-        plt.imshow(new_img)
-        plt.axis('off')
-        plt.title(prediction)
-        plt.savefig('output/prediction.png')
-
-    def load_weights(self, path):
-        self.model.load_weights(path)
-        self.loaded_weights = True
-
-    def predict(self, image_path):
+    def predict_one_shot(self, image_path):
         new_img = load_img(image_path, target_size=(256, 256))
         img = img_to_array(new_img)
         img = np.expand_dims(img, axis=0)
@@ -143,4 +150,13 @@ class Compiler():
         for index,item in enumerate(d):
             if item == j:
                 class_name = li[index]
-        return class_name
+        return class_name, j
+
+    def predict(self, image_path):
+        class_name, confidence = self.predict_one_shot(image_path)
+        record = {}
+        record['filename'] = image_path
+        record['time-stamp'] = os.path.split(image_path)[1]
+        record['confidence'] = confidence
+        record['classification'] = class_name
+        save_result_to_csv(self.prediction_output_dir, record)
