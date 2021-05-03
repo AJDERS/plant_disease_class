@@ -1,10 +1,13 @@
 import os 
-import time 
-from util.scheduler import Scheduler
+from compiler import Compiler
 
 def main():
-    S = Scheduler('default_config.ini')
-    S.run()
+    c = Compiler('default_config.ini')
+    c.compile()
+    c.model.summary()
+    history = c.fit()
+    c.plot_history()
+    c.plot_prediction()
     
 if __name__=='__main__':
     main()
