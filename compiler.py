@@ -156,7 +156,7 @@ class Compiler():
         class_name, confidence = self.predict_one_shot(image_path)
         record = {}
         record['filename'] = image_path
-        record['time-stamp'] = os.path.split(image_path)[1]
+        record['time-stamp'] = os.path.split(image_path)[1].split('.')[0]
         record['confidence'] = confidence
         record['classification'] = class_name
         save_result_to_csv(self.prediction_output_dir, record)
