@@ -36,9 +36,19 @@ def identify_leaf_segments(color_segments, segments):
                 break
 
     mse_seg_green = np.sum(((segment_colors - green_array)**2), axis=1)
+    # MSE of 10000 between segment color and green is experimentally set
     leaf_seg_mask = np.ma.masked_array(mse_seg_green, mse_seg_green < 10000).mask
     leaf_seg_index = [i for (i,s) in enumerate(leaf_seg_mask) if s]
     return leaf_seg_index
+
+def minimum_bounding_box(segments, leaf_seg_index):
+    bounding_boxes = []
+    for leaf_index in leaf_seg_index:
+        leaf_coords = np.argwhere(segments == leaf_index)
+        min_x, min_y = np.min(leaf_coords[...,0]), np.min(leaf_coords[...,1])
+        max_x, max_y = np.max(leaf_coords[...,0]), np.max(leaf_coords[...,1])
+        bounding_boxes.append([min_x, min_y, max_x, max_y])
+    return bounding_boxes
 
 def save_image(image_data):
         im = Image.fromarray(image_data.astype(np.uint8))
