@@ -1,6 +1,7 @@
 import numpy as np
 import skimage.color as color
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 from PIL import Image
 from skimage.segmentation import slic
 
@@ -49,6 +50,21 @@ def minimum_bounding_box(segments, leaf_seg_index):
         max_x, max_y = np.max(leaf_coords[...,0]), np.max(leaf_coords[...,1])
         bounding_boxes.append([min_x, min_y, max_x, max_y])
     return bounding_boxes
+
+def add_bounding_boxes(image_dir, bounding_boxes):
+    im = Image.open(image_dir)
+    fig, ax = plt.subplots()
+    ax.imshow(im)
+
+    for (min_x, min_y, max_x, max_y) in bounding_boxes:
+        # Create a Rectangle patch
+        diff_x = max_x - min_x
+        diff_y = max_y - min_y
+        rect = patches.Rectangle((min_x, min_y), diff_x, diff_y, linewidth=1, edgecolor='r', facecolor='none')
+        ax.add_patch(rect)
+    plt.savefig('test_2.jpeg')
+
+
 
 def save_image(image_data):
         im = Image.fromarray(image_data.astype(np.uint8))
